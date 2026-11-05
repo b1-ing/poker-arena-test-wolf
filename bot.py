@@ -117,6 +117,8 @@ class WolfBot(PokerBot):
         except TypeError:
             super().__init__()
         self.rng = random.Random(1234)
+        self.bets = 0    # postflop bets we faced
+        self.checks = 0  # postflop checks by opponent (seen when we hold the button)
 
     # ---------------------------------------------------------------- helpers
     @staticmethod
@@ -216,6 +218,17 @@ class WolfBot(PokerBot):
         )
         can_raise = gs.can_raise or gs.can_bet
 
+        if to_call > 0:
+            self.bets += 1
+        elif gs.is_dealer:
+            self.checks += 1
+        n = self.bets + self.checks
+        agg = self.bets / n if n else 0.5
+        # Against a frequent bettor, many bets are bluffs: call wider.
+        slack = 0.0
+        if n >= 25:
+            slack = 0.12 if agg > 0.55 else (-0.04 if agg < 0.3 else 0.0)
+
         if to_call == 0:  # we may bet
             if level == 5:
                 return self._frac_bet(gs, 0.9 if street == "river" else 0.75)
@@ -232,6 +245,15 @@ class WolfBot(PokerBot):
                 and self.rng.random() < 0.35
             ):
                 return self._frac_bet(gs, 0.33)  # occasional c-bet bluff
+            if (
+                level <= 2
+                and street == "turn"
+                and gs.is_dealer
+                and n >= 25
+                and agg < 0.3
+                and self.rng.random() < 0.3
+            ):
+                return self._frac_bet(gs, 0.5)  # passive opponent: stab when checked to
             return Action.call()
 
         # Facing a bet.
@@ -243,11 +265,11 @@ class WolfBot(PokerBot):
                 return self._frac_bet(gs, 1.0)
             return Action.call()
         if level == 4:
-            limit = 0.42 if street == "river" else 0.5
+            limit = (0.42 if street == "river" else 0.5) + slack
             return Action.call() if price <= limit else Action.fold()
         if level == 3:
-            return Action.call() if price <= 0.26 else Action.fold()
+            return Action.call() if price <= 0.26 + slack else Action.fold()
         if level == 2:
             equity = 0.33 if street == "flop" else 0.17
-            return Action.call() if price <= equity else Action.fold()
+            return Action.call() if price <= equity + slack / 2 else Action.fold()
         return Action.fold()
